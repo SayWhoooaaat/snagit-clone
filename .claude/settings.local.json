@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x run.sh)",
+      "Bash(.venv/bin/python /tmp/claude-1000/-home-ef-coding-projects-snagit-clone/c97e8c9e-868e-4ad6-8eea-2f7754fd69cb/scratchpad/smoke.py)"
+    ]
+  }
+}

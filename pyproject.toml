@@ -1,0 +1,16 @@
+[project]
+name = "annotator"
+version = "0.1.0"
+description = "A lightweight, Snagit-style image annotation editor for Linux"
+requires-python = ">=3.10"
+dependencies = ["PySide6-Essentials>=6.6"]
+
+[project.scripts]
+annotator = "annotator.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["annotator"]
