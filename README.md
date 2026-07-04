@@ -50,12 +50,17 @@ thumbnail to reopen that document fully editable.
   `Shift` for free resize), a **rotate** handle, and **Flip H / Flip V**.
 - The canvas **auto-expands** whenever an object is placed or dragged past its
   current bounds — nothing is ever clipped.
-- **Resize the page**: drag any of the four dark corner grips to shrink or grow
-  the white page (clamped so it never clips existing content). Handy for
-  reclaiming space after the page auto-grew from dragging something far out.
+- **Resize the page**: drag any of the four dark corner grips. While you drag,
+  a **dashed outline previews** the new size — the canvas, zoom and scroll stay
+  completely still — and the new size is applied in one step when you release
+  (then re-fit and centered). Shrinking below your content just crops it on
+  export; the cropped part stays visible in the grey surround, so nothing is
+  lost. Handy for reclaiming space after the page auto-grew.
 - **Auto zoom-out**: when the page grows beyond the viewport the view zooms out
   so the whole page stays visible. Scrollbars only appear when you've zoomed in
   past the fit level.
+- **Always centered**: after any auto-fit or canvas resize, the page is centered
+  in the viewport.
 - **Zoom controls** in the status bar: `Fit`, `−`, an editable percentage field
   (type a number and press Enter), and `+`. Also `Ctrl+0` (Fit),
   `Ctrl+=` / `Ctrl+-` (in/out), and `Ctrl`+mouse-wheel.

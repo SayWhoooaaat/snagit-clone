@@ -113,7 +113,6 @@ class BaseItem(QGraphicsObject):
             after = self.mapToScene(anchor_local)
             self.setPos(self.pos() + (before - after))
         self.layout_handles()
-        self.grow_scene()
 
     def _apply_transform(self):
         c = self._rect.center()
@@ -146,11 +145,18 @@ class BaseItem(QGraphicsObject):
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemSelectedHasChanged:
             self._sync_handles(bool(value))
-        elif change == QGraphicsItem.ItemPositionHasChanged:
-            self.grow_scene()
         elif change == QGraphicsItem.ItemSceneHasChanged and value is not None:
             self.grow_scene()
+        # Note: we deliberately do NOT grow the page on ItemPositionHasChanged.
+        # Growing mid-drag makes the canvas leap around; instead we grow once on
+        # mouse release (see mouseReleaseEvent) so the page settles when you drop.
         return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        sc = self.scene()
+        if sc is not None and hasattr(sc, "grow_to_content"):
+            sc.grow_to_content()
 
     def _sync_handles(self, selected: bool):
         for h in self._handles:
@@ -195,7 +201,9 @@ class BaseItem(QGraphicsObject):
             self._do_resize(role, self.mapFromScene(scene_pos), modifiers)
 
     def end_transform(self):
-        self.grow_scene()
+        sc = self.scene()
+        if sc is not None and hasattr(sc, "grow_to_content"):
+            sc.grow_to_content()
 
     def _do_rotate(self, scene_pos, modifiers):
         center = self.mapToScene(self._rect.center())
@@ -373,7 +381,6 @@ class LineItem(BaseItem):
         self._recalc_rect()
         self._apply_transform()
         self.layout_handles()
-        self.grow_scene()
 
     def _remap(self, old: QRectF, new: QRectF):
         def m(p):
@@ -577,7 +584,6 @@ class CalloutItem(_TextHostMixin, BaseItem):
         self._tail = local
         self.update()
         self.layout_handles()
-        self.grow_scene()
 
     def _remap(self, old, new):
         fx = (self._tail.x() - old.left()) / old.width() if old.width() else 0.5

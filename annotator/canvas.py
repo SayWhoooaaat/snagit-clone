@@ -65,6 +65,7 @@ class PageHandle(QGraphicsItem):
         painter.drawLine(QPointF(0, d), QPointF(d, 0))
 
     def mousePressEvent(self, event):
+        self._scene_ref._begin_page_drag(self.role)
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -83,6 +84,9 @@ class Scene(QGraphicsScene):
         super().__init__()
         self._page = QRectF(DEFAULT_PAGE)
         self._render_plain = False
+        self._page_dragged = False
+        self._page_fixed = None   # the corner held fixed during a resize drag
+        self._preview = None      # dashed preview rect while dragging a corner
         self.setSceneRect(self._page)
         self._page_handles = [PageHandle(self, r) for r in PAGE_CORNERS]
         for h in self._page_handles:
@@ -94,7 +98,8 @@ class Scene(QGraphicsScene):
         return QRectF(self._page)
 
     def _layout_page_handles(self):
-        r = self._page
+        # follow the live preview while resizing, otherwise the committed page
+        r = self._preview if self._preview is not None else self._page
         pos = {"tl": r.topLeft(), "tr": r.topRight(),
                "br": r.bottomRight(), "bl": r.bottomLeft()}
         for h in self._page_handles:
@@ -118,23 +123,67 @@ class Scene(QGraphicsScene):
             rect = rect.united(it.sceneBoundingRect())
         return rect
 
-    def resize_page_corner(self, role: str, pt: QPointF):
-        r = self._page
-        opposite = {"tl": r.bottomRight(), "tr": r.bottomLeft(),
-                    "br": r.topLeft(), "bl": r.topRight()}[role]
-        new = QRectF(opposite, pt).normalized()
-        # never shrink past the actual content, and never below a minimum
+    def grow_to_content(self):
+        """Expand the page to include all content. Called once, on release."""
         cb = self.content_bounds()
-        if cb is not None and cb.isValid():
-            new = new.united(cb)
-        if new.width() < MIN_PAGE:
-            new.setWidth(MIN_PAGE)
-        if new.height() < MIN_PAGE:
-            new.setHeight(MIN_PAGE)
-        self._set_page(new)
+        if cb is not None:
+            self.grow_to_include(cb)
+
+    def _opposite_corner(self, role: str) -> QPointF:
+        r = self._page
+        return {"tl": r.bottomRight(), "tr": r.bottomLeft(),
+                "br": r.topLeft(), "bl": r.topRight()}[role]
+
+    def _begin_page_drag(self, role: str = None):
+        self._page_dragged = False
+        self._page_fixed = self._opposite_corner(role) if role else None
+        self._preview = None
+
+    def resize_page_corner(self, role: str, pt: QPointF):
+        fixed = self._page_fixed
+        if fixed is None:
+            fixed = self._opposite_corner(role)
+        # The preview follows the cursor exactly (opposite corner stays put); we
+        # only enforce a minimum size. No content clamping — dragging the canvas
+        # smaller simply crops on export, and the content stays visible in the
+        # surround so nothing is lost.
+        w = max(MIN_PAGE, abs(pt.x() - fixed.x()))
+        h = max(MIN_PAGE, abs(pt.y() - fixed.y()))
+        left = fixed.x() if pt.x() >= fixed.x() else fixed.x() - w
+        top = fixed.y() if pt.y() >= fixed.y() else fixed.y() - h
+        # Preview ONLY: nothing about the real page, zoom, scroll or scene rect
+        # changes during the drag. We just draw a dashed outline (drawForeground)
+        # and move the grips. The single, real update happens on release.
+        self._preview = QRectF(left, top, w, h)
+        self._page_dragged = True
+        self._layout_page_handles()
+        self.update()
 
     def finish_page_resize(self):
+        preview = self._preview
+        self._preview = None
+        self._page_fixed = None
+        if not self._page_dragged or preview is None:
+            self._page_dragged = False
+            self._layout_page_handles()
+            self.update()
+            return
+        self._page_dragged = False
+        # Apply the previewed size now, then re-fit + centre once.
+        self._page = preview
+        self.setSceneRect(self._page)
+        self._layout_page_handles()
+        self.update()
         self.pageResized.emit()
+
+    def drawForeground(self, painter, rect):
+        if self._render_plain or self._preview is None:
+            return
+        pen = QPen(QColor("#1565c0"), 0, Qt.DashLine)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(self._preview)
 
     def drawBackground(self, painter, rect):
         if self._render_plain:
@@ -242,6 +291,7 @@ class Canvas(QGraphicsView):
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setAlignment(Qt.AlignCenter)  # centre the page when it fits
         # Scrollbars only when the page is bigger than the viewport (zoomed in).
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -382,6 +432,10 @@ class Canvas(QGraphicsView):
         if self.current_zoom() > target + 1e-3:
             self._fit_mode = True
             self._set_zoom(target, center_page=True)
+        elif self._fit_mode:
+            # Page changed but still fits at the current zoom — keep it centred
+            # so the canvas always sits in the middle of the viewport.
+            self.centerOn(self.scene_.page_rect().center())
 
     def set_zoom_percent(self, percent: float):
         self._fit_mode = False
@@ -414,7 +468,10 @@ class Canvas(QGraphicsView):
         # Only re-fit on a genuine viewport resize while tracking the page.
         # In manual-zoom mode we leave zoom alone, so toggling scrollbars
         # (which also resizes the viewport) can't fight the user's zoom.
-        if self._fit_mode:
+        # Also never re-fit mid page-resize drag: growing past the viewport
+        # makes scrollbars appear (a resize), which would otherwise zoom the
+        # canvas out from under the cursor. We re-fit once, on release.
+        if self._fit_mode and not self.scene_._page_dragged:
             self.fit_to_page()
 
     def showEvent(self, event):
@@ -472,7 +529,6 @@ class Canvas(QGraphicsView):
             self._new_item._rect = rect
             self._new_item._apply_transform()
             self._new_item.layout_handles()
-        self._new_item.grow_scene()
         event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -491,6 +547,7 @@ class Canvas(QGraphicsView):
         else:
             self.scene_.clearSelection()
             item.setSelected(True)
+            self.scene_.grow_to_content()
         self._finish_tool()
         event.accept()
 
