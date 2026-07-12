@@ -6,7 +6,7 @@ in its own local coordinate space, which keeps this class tiny.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF, QPointF
+from PySide6.QtCore import Qt, QEvent, QRectF, QPointF
 from PySide6.QtGui import QColor, QPen, QBrush, QPainterPath
 from PySide6.QtWidgets import QGraphicsItem
 
@@ -51,6 +51,8 @@ class HandleItem(QGraphicsItem):
         return path
 
     def paint(self, painter, option, widget=None):
+        if getattr(self.scene(), "_render_plain", False):
+            return  # exporting: handles must not appear in the output
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         h = HANDLE / 2
         if self.role == ROTATE:
@@ -79,3 +81,10 @@ class HandleItem(QGraphicsItem):
     def mouseReleaseEvent(self, event):
         self.parentItem().end_transform()
         event.accept()
+
+    def sceneEvent(self, event):
+        # Safety net: commit the transform if the mouse grab is lost mid-drag
+        # (the release then never arrives). No-op after a normal release.
+        if event.type() == QEvent.UngrabMouse and self.parentItem() is not None:
+            self.parentItem().end_transform()
+        return super().sceneEvent(event)

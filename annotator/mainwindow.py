@@ -253,10 +253,18 @@ class MainWindow(QMainWindow):
         self._autosave.stop()
         if self.canvas.scene_.is_empty():
             return
+        # Never save mid-interaction: the document is in a transient state
+        # (half-finished drag, page-resize preview), and saving must not be
+        # able to disturb an active mouse grab. Try again once things settle.
+        if not force and (
+                self.canvas.scene_.mouseGrabberItem() is not None
+                or QGuiApplication.mouseButtons() != Qt.NoButton):
+            self._autosave.start()
+            return
         if self.doc_path is None:
             self.doc_path = L.new_document_path()
-        # guard so the clearSelection() inside render_document() doesn't
-        # re-trigger auto-save and spin forever.
+        # guard so repaints triggered by rendering can't re-arm the
+        # auto-save timer and spin forever.
         self._loading = True
         try:
             data = self.canvas.scene_.serialize()

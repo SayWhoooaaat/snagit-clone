@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QByteArray, QBuffer, QIODevice
+from PySide6.QtCore import (
+    Qt, QEvent, QRectF, QPointF, QSizeF, QByteArray, QBuffer, QIODevice,
+)
 from PySide6.QtGui import (
     QColor, QPen, QBrush, QFont, QFontMetricsF, QPainterPath,
     QPainterPathStroker, QPixmap, QTransform, QPolygonF,
@@ -42,6 +44,8 @@ class BaseItem(QGraphicsObject):
         self._flip_h = False
         self._flip_v = False
         self._handles: list[H.HandleItem] = []
+        self._press_pos = QPointF()
+        self._start_bounds = QRectF()
         self.setFlags(
             QGraphicsItem.ItemIsSelectable
             | QGraphicsItem.ItemIsMovable
@@ -145,18 +149,41 @@ class BaseItem(QGraphicsObject):
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemSelectedHasChanged:
             self._sync_handles(bool(value))
-        elif change == QGraphicsItem.ItemSceneHasChanged and value is not None:
-            self.grow_scene()
-        # Note: we deliberately do NOT grow the page on ItemPositionHasChanged.
-        # Growing mid-drag makes the canvas leap around; instead we grow once on
-        # mouse release (see mouseReleaseEvent) so the page settles when you drop.
+        # Note: the page never grows here (neither on position changes nor on
+        # entering the scene). Growing mid-drag makes the canvas leap around;
+        # instead we grow once on mouse release (see mouseReleaseEvent) so the
+        # page settles when you drop.
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self._press_pos = QPointF(self.pos())
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        self._commit_move()
+
+    def sceneEvent(self, event):
+        # Safety net: commit the move if the mouse grab is lost mid-drag
+        # (the release then never arrives). No-op after a normal release.
+        if event.type() == QEvent.UngrabMouse:
+            self._commit_move()
+        return super().sceneEvent(event)
+
+    def _commit_move(self):
+        if self.pos() == self._press_pos:
+            return  # plain click: must not re-expand a page the user shrank
+        self._press_pos = QPointF(self.pos())  # make repeat calls a no-op
         sc = self.scene()
-        if sc is not None and hasattr(sc, "grow_to_content"):
-            sc.grow_to_content()
+        if sc is None or not hasattr(sc, "grow_to_include"):
+            return
+        # Qt drags all selected items together but delivers the release only
+        # to the grabbed one, so grow by every selected item's bounds.
+        rect = self.sceneBoundingRect()
+        for it in sc.selectedItems():
+            if isinstance(it, BaseItem):
+                rect = rect.united(it.sceneBoundingRect())
+        sc.grow_to_include(rect)
 
     def _sync_handles(self, selected: bool):
         for h in self._handles:
@@ -191,6 +218,7 @@ class BaseItem(QGraphicsObject):
     # -- transform interaction (called by handles) -----------------------
     def begin_transform(self, role: str):
         self._start_rect = QRectF(self._rect)
+        self._start_bounds = self.sceneBoundingRect()
 
     def update_transform(self, role, scene_pos, modifiers):
         if role == H.ROTATE:
@@ -201,9 +229,12 @@ class BaseItem(QGraphicsObject):
             self._do_resize(role, self.mapFromScene(scene_pos), modifiers)
 
     def end_transform(self):
-        sc = self.scene()
-        if sc is not None and hasattr(sc, "grow_to_content"):
-            sc.grow_to_content()
+        # Grow only by this item, and only if the handle drag actually changed
+        # its footprint — a bare click on a handle must leave the page alone.
+        if self.sceneBoundingRect() == self._start_bounds:
+            return
+        self._start_bounds = self.sceneBoundingRect()  # make repeats a no-op
+        self.grow_scene()
 
     def _do_rotate(self, scene_pos, modifiers):
         center = self.mapToScene(self._rect.center())
@@ -256,7 +287,7 @@ class BaseItem(QGraphicsObject):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         painter.setRenderHint(painter.RenderHint.SmoothPixmapTransform, True)
         self.paint_content(painter)
-        if self.isSelected():
+        if self.isSelected() and not getattr(self.scene(), "_render_plain", False):
             pen = QPen(QColor("#1565c0"))
             pen.setCosmetic(True)
             pen.setStyle(Qt.DashLine)

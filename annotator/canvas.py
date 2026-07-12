@@ -1,11 +1,11 @@
 """The editing surface: an auto-expanding QGraphicsScene + QGraphicsView."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRectF, QPointF, Signal
+from PySide6.QtCore import Qt, QEvent, QRectF, QPointF, Signal
 from PySide6.QtGui import (
     QImage, QPainter, QPixmap, QColor, QGuiApplication, QPen, QBrush,
 )
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QGraphicsItem
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 
 from .model import Style
 from . import items as I
@@ -26,54 +26,21 @@ _RECTY = {RECT: I.RectItem, ELLIPSE: I.EllipseItem}
 DEFAULT_PAGE = QRectF(0, 0, 200, 200)
 SURROUND = QColor("#3a3f44")
 PAGE_BG = QColor("#ffffff")
-PAGE_CORNERS = ("tl", "tr", "br", "bl")
 MIN_PAGE = 40.0
 
 
-class PageHandle(QGraphicsItem):
-    """A draggable corner grip on the document page, used to shrink/grow it."""
-
-    SIZE = 16
-    _CURSORS = {"tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
+# Page corner grips are NOT scene items. They are drawn by the view
+# (Canvas.drawForeground) and hit-tested in Canvas' own mouse handlers, in
+# viewport pixels. Scene-item grips proved fragile: a drag depends on the
+# item keeping the scene's mouse grab until release, and anything that
+# disturbs that grab mid-drag (hiding the item, a compositor swallowing the
+# release at a screen edge, a popup) strands the resize preview. The view's
+# handlers always see every event the widget gets, and heal themselves when
+# a release goes missing (see Canvas.mouseMoveEvent / event()).
+GRIP_PX = 16                    # on-screen grip size, zoom-independent
+GRIP_HIT_PX = GRIP_PX / 2 + 4   # press-within distance from a corner
+GRIP_CURSORS = {"tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
                 "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor}
-
-    def __init__(self, scene: "Scene", role: str):
-        super().__init__()
-        self._scene_ref = scene
-        self.role = role
-        # constant screen size, always grabbable however far you've zoomed out
-        self.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
-        self.setZValue(2_000_000)
-        self.setAcceptHoverEvents(True)
-        self.setCursor(self._CURSORS[role])
-        self.setToolTip("Drag to resize the canvas")
-
-    def boundingRect(self) -> QRectF:
-        s = self.SIZE
-        return QRectF(-s / 2 - 2, -s / 2 - 2, s + 4, s + 4)
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        s = self.SIZE
-        painter.setPen(QPen(QColor("#eceff1"), 1.5))
-        painter.setBrush(QBrush(QColor("#455a64")))
-        painter.drawRoundedRect(QRectF(-s / 2, -s / 2, s, s), 3, 3)
-        # two short strokes hinting a diagonal resize grip
-        painter.setPen(QPen(QColor("#eceff1"), 1.4))
-        d = s / 2 - 4
-        painter.drawLine(QPointF(-d, d), QPointF(d, -d))
-        painter.drawLine(QPointF(0, d), QPointF(d, 0))
-
-    def mousePressEvent(self, event):
-        self._scene_ref._begin_page_drag(self.role)
-        event.accept()
-
-    def mouseMoveEvent(self, event):
-        self._scene_ref.resize_page_corner(self.role, event.scenePos())
-
-    def mouseReleaseEvent(self, event):
-        self._scene_ref.finish_page_resize()
-        event.accept()
 
 
 class Scene(QGraphicsScene):
@@ -88,46 +55,23 @@ class Scene(QGraphicsScene):
         self._page_fixed = None   # the corner held fixed during a resize drag
         self._preview = None      # dashed preview rect while dragging a corner
         self.setSceneRect(self._page)
-        self._page_handles = [PageHandle(self, r) for r in PAGE_CORNERS]
-        for h in self._page_handles:
-            self.addItem(h)
-        self._layout_page_handles()
 
     # -- page / background ------------------------------------------------
     def page_rect(self) -> QRectF:
         return QRectF(self._page)
 
-    def _layout_page_handles(self):
-        # follow the live preview while resizing, otherwise the committed page
-        r = self._preview if self._preview is not None else self._page
-        pos = {"tl": r.topLeft(), "tr": r.topRight(),
-               "br": r.bottomRight(), "bl": r.bottomLeft()}
-        for h in self._page_handles:
-            h.setPos(pos[h.role])
+    def grip_rect(self) -> QRectF:
+        """The rect the corner grips sit on: live preview while resizing,
+        otherwise the committed page."""
+        return QRectF(self._preview if self._preview is not None else self._page)
 
     def _set_page(self, rect: QRectF):
         self._page = QRectF(rect)
         # scene rect tracks the page tightly, so the view only scrolls when the
         # user has zoomed in past the fit-to-page level.
         self.setSceneRect(self._page)
-        self._layout_page_handles()
         self.update()
         self.pageChanged.emit()
-
-    def content_bounds(self):
-        items = self._content()
-        if not items:
-            return None
-        rect = QRectF()
-        for it in items:
-            rect = rect.united(it.sceneBoundingRect())
-        return rect
-
-    def grow_to_content(self):
-        """Expand the page to include all content. Called once, on release."""
-        cb = self.content_bounds()
-        if cb is not None:
-            self.grow_to_include(cb)
 
     def _opposite_corner(self, role: str) -> QPointF:
         r = self._page
@@ -156,25 +100,31 @@ class Scene(QGraphicsScene):
         # and move the grips. The single, real update happens on release.
         self._preview = QRectF(left, top, w, h)
         self._page_dragged = True
-        self._layout_page_handles()
         self.update()
 
     def finish_page_resize(self):
+        """Commit the preview as the new page. Safe to call repeatedly and
+        with no drag active (no-op then)."""
         preview = self._preview
         self._preview = None
         self._page_fixed = None
         if not self._page_dragged or preview is None:
             self._page_dragged = False
-            self._layout_page_handles()
             self.update()
             return
         self._page_dragged = False
         # Apply the previewed size now, then re-fit + centre once.
         self._page = preview
         self.setSceneRect(self._page)
-        self._layout_page_handles()
         self.update()
         self.pageResized.emit()
+
+    def cancel_page_resize(self):
+        """Discard the preview (Esc), leaving the page as it was."""
+        self._preview = None
+        self._page_fixed = None
+        self._page_dragged = False
+        self.update()
 
     def drawForeground(self, painter, rect):
         if self._render_plain or self._preview is None:
@@ -233,8 +183,14 @@ class Scene(QGraphicsScene):
 
     # -- export -----------------------------------------------------------
     def render_document(self) -> QImage | None:
-        """Render the white page (and everything on it) to an image."""
-        self.clearSelection()
+        """Render the white page (and everything on it) to an image.
+
+        Must not mutate any scene state (selection, visibility, grabs):
+        it can run mid-drag via the autosave timer, and e.g. hiding the
+        grip that holds the mouse grab would silently cancel the drag.
+        ``_render_plain`` makes all UI chrome (surround, grips, selection
+        marks, preview dashes) skip painting instead.
+        """
         rect = QRectF(self._page)
         if rect.width() < 1 or rect.height() < 1:
             return None
@@ -244,14 +200,12 @@ class Scene(QGraphicsScene):
         painter = QPainter(img)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        for h in self._page_handles:
-            h.setVisible(False)
-        self._render_plain = True  # skip the dark surround; page is pre-filled
-        self.render(painter, QRectF(img.rect()), rect)
-        self._render_plain = False
-        for h in self._page_handles:
-            h.setVisible(True)
-        painter.end()
+        self._render_plain = True
+        try:
+            self.render(painter, QRectF(img.rect()), rect)
+        finally:
+            self._render_plain = False
+            painter.end()
         return img
 
     # -- document (de)serialization --------------------------------------
@@ -289,6 +243,11 @@ class Canvas(QGraphicsView):
         self.scene_ = Scene()
         super().__init__(self.scene_)
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        # Full repaints, always. The grips and preview dashes are drawn from
+        # state outside the scene's item tree, so minimal dirty-region
+        # tracking would leave stale pixels behind. The scene is a single
+        # page with a few items; repainting everything costs nothing here.
+        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setAlignment(Qt.AlignCenter)  # centre the page when it fits
@@ -303,6 +262,8 @@ class Canvas(QGraphicsView):
         self._new_item = None
         self._start = QPointF()
         self._fit_mode = True  # True while the view tracks the whole page
+        self._grip_drag = None   # corner role while a page-resize drag is live
+        self._grip_hover = None  # corner role the cursor is currently over
         self.scene_.selectionChanged.connect(self.selectionChanged)
         self.scene_.pageChanged.connect(self._auto_fit)
         # after the user drags a page corner, re-fit so a shrunk page zooms in
@@ -311,6 +272,7 @@ class Canvas(QGraphicsView):
     # -- tool / style -----------------------------------------------------
     def set_tool(self, tool: str):
         self.tool = tool
+        self._grip_hover = None  # re-evaluate the cursor on the next move
         self.setDragMode(QGraphicsView.RubberBandDrag if tool == SELECT
                          else QGraphicsView.NoDrag)
         self.viewport().setCursor(Qt.ArrowCursor if tool == SELECT
@@ -329,10 +291,12 @@ class Canvas(QGraphicsView):
             return None
         item = I.ImageItem(pixmap, self.style)
         item.setZValue(self.scene_.next_z())
-        self.scene_.addItem(item)
         if center_on is None:
             center_on = self.mapToScene(self.viewport().rect().center())
+        # Position before adding: the page must only grow around the image's
+        # real spot, never around a temporary position.
         item.setPos(center_on - QPointF(pixmap.width() / 2, pixmap.height() / 2))
+        self.scene_.addItem(item)
         item.grow_scene()
         self.scene_.clearSelection()
         item.setSelected(True)
@@ -471,16 +435,93 @@ class Canvas(QGraphicsView):
         # Also never re-fit mid page-resize drag: growing past the viewport
         # makes scrollbars appear (a resize), which would otherwise zoom the
         # canvas out from under the cursor. We re-fit once, on release.
-        if self._fit_mode and not self.scene_._page_dragged:
+        if (self._fit_mode and self._grip_drag is None
+                and not self.scene_._page_dragged):
             self.fit_to_page()
 
     def showEvent(self, event):
         super().showEvent(event)
+        # watch the window: if it deactivates mid grip-drag (alt-tab, an
+        # Activities overview stealing the pointer), end the drag cleanly
+        win = self.window()
+        if win is not None and win is not self:
+            win.removeEventFilter(self)
+            win.installEventFilter(self)
         self.centerOn(self.scene_.page_rect().center())
         self.zoomChanged.emit(self.current_zoom())
 
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.WindowDeactivate and self._grip_drag is not None:
+            self._end_grip_drag()
+        return super().eventFilter(obj, ev)
+
+    # -- page corner grips (drawn + hit-tested in viewport pixels) ---------
+    def _grip_at(self, vp_pos) -> str | None:
+        r = self.scene_.grip_rect()
+        corners = {"tl": r.topLeft(), "tr": r.topRight(),
+                   "br": r.bottomRight(), "bl": r.bottomLeft()}
+        for role, scene_pt in corners.items():
+            c = self.mapFromScene(scene_pt)
+            if (abs(vp_pos.x() - c.x()) <= GRIP_HIT_PX
+                    and abs(vp_pos.y() - c.y()) <= GRIP_HIT_PX):
+                return role
+        return None
+
+    def _end_grip_drag(self):
+        self._grip_drag = None
+        self.scene_.finish_page_resize()
+
+    def _update_hover_cursor(self, vp_pos):
+        role = self._grip_at(vp_pos) if self.tool == SELECT else None
+        if role == self._grip_hover:
+            return
+        self._grip_hover = role
+        if role is not None:
+            self.viewport().setCursor(GRIP_CURSORS[role])
+        else:
+            self.viewport().setCursor(Qt.ArrowCursor if self.tool == SELECT
+                                      else Qt.CrossCursor)
+
+    def drawForeground(self, painter, rect):
+        super().drawForeground(painter, rect)  # scene draws the preview dashes
+        if self.scene_._render_plain:
+            return
+        r = self.scene_.grip_rect()
+        s = GRIP_PX
+        painter.save()
+        painter.resetTransform()  # draw in viewport pixels: constant grip size
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        for scene_pt in (r.topLeft(), r.topRight(),
+                         r.bottomRight(), r.bottomLeft()):
+            c = self.mapFromScene(scene_pt)
+            painter.save()
+            painter.translate(c.x(), c.y())
+            painter.setPen(QPen(QColor("#eceff1"), 1.5))
+            painter.setBrush(QBrush(QColor("#455a64")))
+            painter.drawRoundedRect(QRectF(-s / 2, -s / 2, s, s), 3, 3)
+            # two short strokes hinting a diagonal resize grip
+            painter.setPen(QPen(QColor("#eceff1"), 1.4))
+            d = s / 2 - 4
+            painter.drawLine(QPointF(-d, d), QPointF(d, -d))
+            painter.drawLine(QPointF(0, d), QPointF(d, 0))
+            painter.restore()
+        painter.restore()
+
     # -- interactive creation --------------------------------------------
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if self._grip_drag is None and self.scene_._preview is not None:
+                # a previous drag ended without us ever seeing the release
+                # (compositor/popup swallowed it) — commit it before anything
+                # else so the preview can never linger
+                self.scene_.finish_page_resize()
+            if self.tool == SELECT:
+                role = self._grip_at(event.position().toPoint())
+                if role is not None:
+                    self._grip_drag = role
+                    self.scene_._begin_page_drag(role)
+                    event.accept()
+                    return
         if self.tool == SELECT or event.button() != Qt.LeftButton:
             return super().mousePressEvent(event)
         self._start = self.mapToScene(event.position().toPoint())
@@ -517,7 +558,18 @@ class Canvas(QGraphicsView):
         return None
 
     def mouseMoveEvent(self, event):
+        if self._grip_drag is not None:
+            if not (event.buttons() & Qt.LeftButton):
+                # the release never reached us (grab lost at a screen edge or
+                # to the compositor) — end the drag exactly as a release would
+                self._end_grip_drag()
+            else:
+                self.scene_.resize_page_corner(
+                    self._grip_drag, self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if self._new_item is None:
+            self._update_hover_cursor(event.position().toPoint())
             return super().mouseMoveEvent(event)
         cur = self.mapToScene(event.position().toPoint())
         dx, dy = cur.x() - self._start.x(), cur.y() - self._start.y()
@@ -532,6 +584,10 @@ class Canvas(QGraphicsView):
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        if self._grip_drag is not None and event.button() == Qt.LeftButton:
+            self._end_grip_drag()
+            event.accept()
+            return
         if self._new_item is None:
             return super().mouseReleaseEvent(event)
         item = self._new_item
@@ -547,9 +603,17 @@ class Canvas(QGraphicsView):
         else:
             self.scene_.clearSelection()
             item.setSelected(True)
-            self.scene_.grow_to_content()
+            item.grow_scene()
         self._finish_tool()
         event.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape and self._grip_drag is not None:
+            self._grip_drag = None
+            self.scene_.cancel_page_resize()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _finish_tool(self):
         # revert to the select tool after placing one annotation
