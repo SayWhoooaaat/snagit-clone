@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
             lambda: self._tool_actions[C.SELECT].setChecked(True))
         self.canvas.scene_.changed.connect(self._schedule_autosave)
         self.filmstrip.docActivated.connect(self.open_document)
+        self.filmstrip.docDeleted.connect(self._on_doc_deleted)
 
     # -- tool -------------------------------------------------------------
     def set_tool(self, tool: str):
@@ -207,7 +208,26 @@ class MainWindow(QMainWindow):
     def open_gallery(self):
         dlg = L.GalleryDialog(self)
         dlg.docActivated.connect(self.open_document)
+        dlg.list.docDeleted.connect(self._on_doc_deleted)
         dlg.exec()
+        self.filmstrip.reload()
+
+    def _on_doc_deleted(self, path: str):
+        """If the deleted document is the one on screen, drop it — otherwise the
+        pending auto-save would immediately write it back to disk."""
+        if self.doc_path == path:
+            self._autosave.stop()
+            self.doc_path = None
+            self._loading = True
+            try:
+                self.canvas.scene_.new_document()
+            finally:
+                self._loading = False
+            self.canvas.fit_to_page()
+            self.set_tool(C.SELECT)
+            self.statusBar().showMessage(
+                "Deleted the open document — started a new one.", 4000)
+        self.filmstrip.reload()
 
     # -- document lifecycle ----------------------------------------------
     def new_document(self):
