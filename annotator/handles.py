@@ -18,6 +18,11 @@ CORNERS = ("tl", "tr", "br", "bl")
 EDGES = ("t", "r", "b", "l")
 ROTATE = "rotate"
 TAIL = "tail"
+# Free endpoint grips — used by lines/arrows instead of the bounding box, so
+# they can be reoriented and resized by dragging either tip directly.
+P1 = "p1"
+P2 = "p2"
+ENDPOINTS = (P1, P2)
 
 _CURSORS = {
     "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
@@ -26,6 +31,8 @@ _CURSORS = {
     "l": Qt.SizeHorCursor, "r": Qt.SizeHorCursor,
     ROTATE: Qt.CrossCursor,
     TAIL: Qt.SizeAllCursor,
+    P1: Qt.SizeAllCursor,
+    P2: Qt.SizeAllCursor,
 }
 
 
@@ -41,8 +48,12 @@ class HandleItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.ItemIgnoresParentOpacity, True)
 
     # -- geometry ---------------------------------------------------------
+    def _radius(self) -> float:
+        # endpoint grips are a touch larger — they're the only grips a line has
+        return HANDLE / 2 + (1.5 if self.role in ENDPOINTS else 0.0)
+
     def boundingRect(self) -> QRectF:
-        h = HANDLE / 2 + 2
+        h = self._radius() + 2
         return QRectF(-h, -h, 2 * h, 2 * h)
 
     def shape(self) -> QPainterPath:
@@ -54,17 +65,22 @@ class HandleItem(QGraphicsItem):
         if getattr(self.scene(), "_render_plain", False):
             return  # exporting: handles must not appear in the output
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        h = HANDLE / 2
+        h = self._radius()
+        painter.setPen(QPen(QColor("#1565c0"), 1.5))
         if self.role == ROTATE:
-            painter.setPen(QPen(QColor("#1565c0"), 1.5))
             painter.setBrush(QBrush(QColor("#ffffff")))
             painter.drawEllipse(QPointF(0, 0), h, h)
+        elif self.role in ENDPOINTS:
+            painter.setBrush(QBrush(QColor("#ffffff")))
+            painter.drawEllipse(QPointF(0, 0), h, h)
+            # inner dot, so a grip sitting on top of an arrowhead stays readable
+            painter.setBrush(QBrush(QColor("#1565c0")))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QPointF(0, 0), h * 0.35, h * 0.35)
         elif self.role == TAIL:
-            painter.setPen(QPen(QColor("#1565c0"), 1.5))
             painter.setBrush(QBrush(QColor("#90caf9")))
             painter.drawEllipse(QPointF(0, 0), h, h)
         else:
-            painter.setPen(QPen(QColor("#1565c0"), 1.5))
             painter.setBrush(QBrush(QColor("#ffffff")))
             painter.drawRect(QRectF(-h, -h, 2 * h, 2 * h))
 

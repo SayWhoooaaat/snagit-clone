@@ -7,11 +7,12 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QDockWidget, QToolBar, QFileDialog,
-    QToolButton, QLineEdit,
+    QToolButton, QLineEdit, QApplication, QPlainTextEdit,
 )
 
 from . import canvas as C
 from . import library as L
+from .history import History
 from .properties import PropertiesPanel
 
 
@@ -22,6 +23,7 @@ class MainWindow(QMainWindow):
         self.resize(1180, 820)
 
         self.canvas = C.Canvas()
+        self.history = History(self.canvas.scene_)
         central = QWidget()
         lay = QVBoxLayout(central)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -73,6 +75,13 @@ class MainWindow(QMainWindow):
         file_tb.addAction(self._act("Save to Library", self.save_to_library,
                                     "Ctrl+S"))
         file_tb.addAction(self._act("Copy", self.copy_result, "Ctrl+Shift+C"))
+        file_tb.addSeparator()
+        self.undo_action = self._act("Undo", self.undo, "Ctrl+Z")
+        self.redo_action = self._act("Redo", self.redo)
+        self.redo_action.setShortcuts(
+            [QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
+        file_tb.addAction(self.undo_action)
+        file_tb.addAction(self.redo_action)
         file_tb.addSeparator()
         file_tb.addAction(self._act("Library", self.open_gallery, "Ctrl+G"))
 
@@ -166,6 +175,29 @@ class MainWindow(QMainWindow):
         self.canvas.scene_.changed.connect(self._schedule_autosave)
         self.filmstrip.docActivated.connect(self.open_document)
         self.filmstrip.docDeleted.connect(self._on_doc_deleted)
+        self.history.changed.connect(self._sync_history_actions)
+        self._sync_history_actions()
+
+    # -- undo / redo --------------------------------------------------------
+    def _sync_history_actions(self):
+        self.undo_action.setEnabled(self.history.can_undo())
+        self.redo_action.setEnabled(self.history.can_redo())
+
+    def undo(self):
+        # While an inline text editor (or the zoom box) has focus, Ctrl+Z must
+        # mean text undo, never a document rollback under the user's cursor.
+        fw = QApplication.focusWidget()
+        if isinstance(fw, (QPlainTextEdit, QLineEdit)):
+            fw.undo()
+            return
+        self.history.undo()
+
+    def redo(self):
+        fw = QApplication.focusWidget()
+        if isinstance(fw, (QPlainTextEdit, QLineEdit)):
+            fw.redo()
+            return
+        self.history.redo()
 
     # -- tool -------------------------------------------------------------
     def set_tool(self, tool: str):
@@ -223,6 +255,7 @@ class MainWindow(QMainWindow):
                 self.canvas.scene_.new_document()
             finally:
                 self._loading = False
+            self.history.reset()
             self.canvas.fit_to_page()
             self.set_tool(C.SELECT)
             self.statusBar().showMessage(
@@ -233,6 +266,7 @@ class MainWindow(QMainWindow):
     def new_document(self):
         self._save_current()
         self.canvas.scene_.new_document()
+        self.history.reset()
         self.doc_path = None
         self.canvas.fit_to_page()
         self.set_tool(C.SELECT)
@@ -250,6 +284,7 @@ class MainWindow(QMainWindow):
             self.canvas.scene_.load_from(data)
         finally:
             self._loading = False
+        self.history.reset()
         self.doc_path = path
         self.canvas.fit_to_page()
         self.props.sync_from_selection()

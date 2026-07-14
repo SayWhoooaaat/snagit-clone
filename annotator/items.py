@@ -191,9 +191,13 @@ class BaseItem(QGraphicsObject):
                 h.scene().removeItem(h)
         self._handles.clear()
         if selected:
-            roles = list(H.CORNERS) + list(H.EDGES) + [H.ROTATE] + self.extra_handles()
-            self._handles = [H.HandleItem(self, r) for r in roles]
+            self._handles = [H.HandleItem(self, r) for r in self.handle_roles()]
             self.layout_handles()
+
+    def handle_roles(self) -> list[str]:
+        """Which grips this item shows when selected. Lines/arrows override this
+        to use free endpoint grips instead of a bounding box."""
+        return list(H.CORNERS) + list(H.EDGES) + [H.ROTATE] + self.extra_handles()
 
     def extra_handles(self) -> list[str]:
         return []
@@ -225,8 +229,13 @@ class BaseItem(QGraphicsObject):
             self._do_rotate(scene_pos, modifiers)
         elif role == H.TAIL:
             self._do_tail(self.mapFromScene(scene_pos))
+        elif role in H.ENDPOINTS:
+            self._do_endpoint(role, self.mapFromScene(scene_pos), modifiers)
         else:
             self._do_resize(role, self.mapFromScene(scene_pos), modifiers)
+
+    def _do_endpoint(self, role, local: QPointF, modifiers):
+        pass
 
     def end_transform(self):
         # Grow only by this item, and only if the handle drag actually changed
@@ -288,12 +297,18 @@ class BaseItem(QGraphicsObject):
         painter.setRenderHint(painter.RenderHint.SmoothPixmapTransform, True)
         self.paint_content(painter)
         if self.isSelected() and not getattr(self.scene(), "_render_plain", False):
-            pen = QPen(QColor("#1565c0"))
-            pen.setCosmetic(True)
-            pen.setStyle(Qt.DashLine)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(self._rect)
+            self.draw_selection(painter)
+
+    def draw_selection(self, painter):
+        pen = QPen(QColor("#1565c0"))
+        pen.setCosmetic(True)
+        pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(self._rect)
+
+    def post_load(self):
+        """Hook run after the item is rebuilt from a saved document."""
 
     def paint_content(self, painter):
         raise NotImplementedError
@@ -326,6 +341,10 @@ class ImageItem(BaseItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self._pixmap = pixmap
         self._rect = QRectF(0, 0, pixmap.width(), pixmap.height())
+        # PNG-encoding cache: the pixmap never changes after construction, and
+        # serialize() runs on every undo checkpoint and auto-save — sharing one
+        # string keeps those snapshots cheap.
+        self._b64: str | None = None
 
     def content_margin(self) -> float:
         return 1.0
@@ -336,7 +355,9 @@ class ImageItem(BaseItem):
         )
 
     def _extra_dict(self) -> dict:
-        return {"image": pixmap_to_b64(self._pixmap)}
+        if self._b64 is None:
+            self._b64 = pixmap_to_b64(self._pixmap)
+        return {"image": self._b64}
 
 
 # --------------------------------------------------------------------------- #
@@ -393,6 +414,17 @@ def _draw_head(painter, tip: QPointF, tail: QPointF, shape: str, size: float,
         painter.drawPolygon(QPolygonF([tip, p1, p2]))
 
 
+def _snap_angle(anchor: QPointF, point: QPointF, step: float = 15.0) -> QPointF:
+    """Constrain `point` to lie at a multiple of `step` degrees from `anchor`."""
+    dx, dy = point.x() - anchor.x(), point.y() - anchor.y()
+    dist = math.hypot(dx, dy)
+    if dist < 1e-6:
+        return QPointF(point)
+    ang = math.radians(round(math.degrees(math.atan2(dy, dx)) / step) * step)
+    return QPointF(anchor.x() + math.cos(ang) * dist,
+                   anchor.y() + math.sin(ang) * dist)
+
+
 class LineItem(BaseItem):
     kind = "line"
 
@@ -420,6 +452,81 @@ class LineItem(BaseItem):
             return QPointF(new.left() + fx * new.width(),
                            new.top() + fy * new.height())
         self._p1, self._p2 = m(self._p1), m(self._p2)
+
+    # -- endpoint grips ----------------------------------------------------
+    # A line is defined by its two tips, not by a box: dragging a tip both
+    # reorients and resizes it. We therefore show only two grips, and we keep
+    # the item transform at identity — rotation/flip are baked straight into the
+    # endpoints — so a dragged tip lands exactly under the cursor.
+    def handle_roles(self) -> list[str]:
+        return [H.P1, H.P2]
+
+    def _handle_pos(self, role: str) -> QPointF:
+        if role == H.P1:
+            return QPointF(self._p1)
+        if role == H.P2:
+            return QPointF(self._p2)
+        return super()._handle_pos(role)
+
+    def _do_endpoint(self, role, local: QPointF, modifiers):
+        other = self._p2 if role == H.P1 else self._p1
+        if modifiers & Qt.ShiftModifier:
+            local = _snap_angle(other, local)
+        self.prepareGeometryChange()
+        if role == H.P1:
+            self._p1 = local
+        else:
+            self._p2 = local
+        self._recalc_rect()
+        self._apply_transform()
+        self.layout_handles()
+        self.update()
+
+    def draw_selection(self, painter):
+        pass  # the two endpoint grips are the whole selection affordance
+
+    # -- rotation / flip are baked into the endpoints ----------------------
+    def _map_endpoints(self, fn):
+        self.prepareGeometryChange()
+        self._p1, self._p2 = fn(self._p1), fn(self._p2)
+        self._recalc_rect()
+        self._apply_transform()
+        self.layout_handles()
+        self.update()
+
+    def set_rotation_deg(self, deg: float):
+        # _rotation stays 0 for lines, so `deg` is the requested delta.
+        c = self._rect.center()
+        rad = math.radians(deg)
+        cos, sin = math.cos(rad), math.sin(rad)
+
+        def rot(p):
+            dx, dy = p.x() - c.x(), p.y() - c.y()
+            return QPointF(c.x() + dx * cos - dy * sin,
+                           c.y() + dx * sin + dy * cos)
+        self._map_endpoints(rot)
+
+    def flip_horizontal(self):
+        cx = self._rect.center().x()
+        self._map_endpoints(lambda p: QPointF(2 * cx - p.x(), p.y()))
+
+    def flip_vertical(self):
+        cy = self._rect.center().y()
+        self._map_endpoints(lambda p: QPointF(p.x(), 2 * cy - p.y()))
+
+    def post_load(self):
+        """Older documents may have stored a rotation/flip on the transform;
+        fold it into the endpoints so the identity-transform invariant holds."""
+        if self._rotation == 0.0 and not self._flip_h and not self._flip_v:
+            return
+        t = self.transform()
+        self.prepareGeometryChange()
+        self._p1, self._p2 = t.map(self._p1), t.map(self._p2)
+        self._rotation = 0.0
+        self._flip_h = False
+        self._flip_v = False
+        self._recalc_rect()
+        self._apply_transform()
 
     def content_margin(self) -> float:
         return self._style.width / 2.0 + self._head_size() + 4.0
@@ -686,6 +793,7 @@ def item_from_dict(d: dict) -> BaseItem:
     style = Style.from_dict(d.get("style", {}))
     if kind == "image":
         it = ImageItem(pixmap_from_b64(d["image"]), style)
+        it._b64 = d["image"]  # keep the exact source bytes; skip a re-encode
     elif kind in ("line", "arrow"):
         cls = ArrowItem if kind == "arrow" else LineItem
         it = cls(style, QPointF(*d["p1"]), QPointF(*d["p2"]))
@@ -707,4 +815,5 @@ def item_from_dict(d: dict) -> BaseItem:
     it.setOpacity(style.opacity)
     it._apply_transform()
     it.setPos(QPointF(*d["pos"]))
+    it.post_load()
     return it
