@@ -1,11 +1,26 @@
-"""Dockable style panel: stroke/fill colour, opacity, width, dash, arrows, text."""
+"""Contextual style panel.
+
+Shows only the settings that make sense for what the user is doing: the
+current selection if there is one, otherwise the active drawing tool. Every
+tool remembers its own style (Canvas.tool_styles), and edits made while items
+are selected also update the matching tool's memory, so the next item drawn
+looks like the one just tweaked.
+
+Context keys are the drawing-tool ids and the item kinds — the two
+vocabularies deliberately overlap ("rect", "text", ...). Lines and arrows are
+the same item with the same options (endpoints included), but each carries a
+permanent kind tag naming the tool preset that created it, and an item's
+edits only ever feed back into that preset's memory — so a line remembers
+its own endpoint choices without ever rewriting the Arrow preset, and vice
+versa.
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QWidget, QFormLayout, QPushButton, QSlider, QSpinBox, QComboBox,
-    QCheckBox, QColorDialog, QLabel, QHBoxLayout,
+    QWidget, QFormLayout, QVBoxLayout, QHBoxLayout, QPushButton, QSlider,
+    QSpinBox, QComboBox, QCheckBox, QColorDialog, QLabel, QGroupBox,
 )
 
 from .model import Style, ARROW_SHAPES
@@ -44,126 +59,182 @@ class ColorButton(QPushButton):
             self.colorChanged.emit()
 
 
+# Which setting groups each context gets (opacity is shown for all of them).
+GROUPS = {
+    "rect": ("stroke", "fill"),
+    "ellipse": ("stroke", "fill"),
+    "line": ("stroke", "ends"),
+    "arrow": ("stroke", "ends"),
+    "text": ("text",),
+    "callout": ("stroke", "fill", "text"),
+    "image": (),
+}
+TITLES = {
+    "rect": "Rectangle", "ellipse": "Ellipse", "line": "Line",
+    "arrow": "Arrow", "text": "Text", "callout": "Callout", "image": "Image",
+}
+
+
 class PropertiesPanel(QWidget):
     def __init__(self, canvas):
         super().__init__()
         self.canvas = canvas
         self._loading = False
-        s = canvas.style
-        form = QFormLayout(self)
-        form.setLabelAlignment(Qt.AlignRight)
 
-        self.stroke = ColorButton(s.stroke)
-        form.addRow("Stroke", self.stroke)
+        outer = QVBoxLayout(self)
+        outer.setAlignment(Qt.AlignTop)
 
-        fill_row = QWidget()
-        fl = QHBoxLayout(fill_row)
-        fl.setContentsMargins(0, 0, 0, 0)
-        self.fill_on = QCheckBox()
-        self.fill_on.setChecked(s.fill_enabled)
-        self.fill = ColorButton(s.fill)
-        fl.addWidget(self.fill_on)
-        fl.addWidget(self.fill, 1)
-        form.addRow("Fill", fill_row)
+        self.header = QLabel()
+        f = self.header.font()
+        f.setBold(True)
+        self.header.setFont(f)
+        outer.addWidget(self.header)
 
+        self.hint = QLabel("Pick a tool, or select an item, to edit its style.")
+        self.hint.setWordWrap(True)
+        outer.addWidget(self.hint)
+
+        self.g_stroke = QGroupBox("Stroke")
+        form = QFormLayout(self.g_stroke)
+        self.stroke = ColorButton(QColor("#e53935"))
+        form.addRow("Colour", self.stroke)
         self.width = QSpinBox()
         self.width.setRange(0, 60)
-        self.width.setValue(s.width)
-        form.addRow("Stroke width", self.width)
-
+        form.addRow("Width", self.width)
         self.dash = QComboBox()
         self.dash.addItems(["solid", "dash", "dot"])
-        self.dash.setCurrentText(s.dash)
-        form.addRow("Line style", self.dash)
+        form.addRow("Dash", self.dash)
+        outer.addWidget(self.g_stroke)
 
-        self.opacity = QSlider(Qt.Horizontal)
-        self.opacity.setRange(10, 100)
-        self.opacity.setValue(int(s.opacity * 100))
-        self.opacity_lbl = QLabel(f"{self.opacity.value()}%")
-        op_row = QWidget()
-        ol = QHBoxLayout(op_row)
-        ol.setContentsMargins(0, 0, 0, 0)
-        ol.addWidget(self.opacity, 1)
-        ol.addWidget(self.opacity_lbl)
-        form.addRow("Opacity", op_row)
+        # the group's own checkbox is the fill on/off switch; Qt disables the
+        # colour button automatically while the box is unchecked
+        self.g_fill = QGroupBox("Fill")
+        self.g_fill.setCheckable(True)
+        form = QFormLayout(self.g_fill)
+        self.fill = ColorButton(QColor("#ffee58"))
+        form.addRow("Colour", self.fill)
+        outer.addWidget(self.g_fill)
 
-        form.addRow(QLabel("<b>Arrows</b>"))
+        self.g_ends = QGroupBox("Endpoints")
+        form = QFormLayout(self.g_ends)
+        heads = QWidget()
+        hl = QHBoxLayout(heads)
+        hl.setContentsMargins(0, 0, 0, 0)
         self.a_start = QCheckBox("Start")
         self.a_end = QCheckBox("End")
-        self.a_start.setChecked(s.arrow_start)
-        self.a_end.setChecked(s.arrow_end)
-        ar_row = QWidget()
-        al = QHBoxLayout(ar_row)
-        al.setContentsMargins(0, 0, 0, 0)
-        al.addWidget(self.a_start)
-        al.addWidget(self.a_end)
-        form.addRow("Heads", ar_row)
+        hl.addWidget(self.a_start)
+        hl.addWidget(self.a_end)
+        form.addRow("Show", heads)
         self.a_shape = QComboBox()
         self.a_shape.addItems(list(ARROW_SHAPES))
-        self.a_shape.setCurrentText(s.arrow_shape)
-        form.addRow("Head shape", self.a_shape)
+        form.addRow("Shape", self.a_shape)
+        outer.addWidget(self.g_ends)
 
-        form.addRow(QLabel("<b>Text</b>"))
+        self.g_text = QGroupBox("Text")
+        form = QFormLayout(self.g_text)
         self.font_size = QSpinBox()
         self.font_size.setRange(6, 200)
-        self.font_size.setValue(s.font_size)
-        form.addRow("Font size", self.font_size)
-        self.text_color = ColorButton(s.text_color)
-        form.addRow("Text colour", self.text_color)
+        form.addRow("Size", self.font_size)
+        self.text_color = ColorButton(QColor("#e53935"))
+        form.addRow("Colour", self.text_color)
+        outer.addWidget(self.g_text)
 
-        for w in (self.stroke, self.fill, self.text_color):
-            w.colorChanged.connect(self._apply)
-        self.fill_on.toggled.connect(self._apply)
-        self.width.valueChanged.connect(self._apply)
-        self.dash.currentTextChanged.connect(self._apply)
-        self.opacity.valueChanged.connect(self._apply)
-        self.a_start.toggled.connect(self._apply)
-        self.a_end.toggled.connect(self._apply)
-        self.a_shape.currentTextChanged.connect(self._apply)
-        self.font_size.valueChanged.connect(self._apply)
+        self.g_opacity = QGroupBox("Opacity")
+        row = QHBoxLayout(self.g_opacity)
+        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity.setRange(10, 100)
+        self.opacity_lbl = QLabel("100%")
+        row.addWidget(self.opacity, 1)
+        row.addWidget(self.opacity_lbl)
+        outer.addWidget(self.g_opacity)
 
-    # -- read/write -------------------------------------------------------
-    def _current_style(self) -> Style:
-        return Style(
-            stroke=self.stroke.color(),
-            fill=self.fill.color(),
-            fill_enabled=self.fill_on.isChecked(),
-            width=self.width.value(),
-            opacity=self.opacity.value() / 100.0,
-            dash=self.dash.currentText(),
-            arrow_start=self.a_start.isChecked(),
-            arrow_end=self.a_end.isChecked(),
-            arrow_shape=self.a_shape.currentText(),
-            font_size=self.font_size.value(),
-            text_color=self.text_color.color(),
-        )
+        self._groups = {"stroke": self.g_stroke, "fill": self.g_fill,
+                        "ends": self.g_ends, "text": self.g_text}
 
-    def _apply(self):
+        self.stroke.colorChanged.connect(
+            lambda: self._set("stroke", self.stroke.color()))
+        self.fill.colorChanged.connect(
+            lambda: self._set("fill", self.fill.color()))
+        self.text_color.colorChanged.connect(
+            lambda: self._set("text_color", self.text_color.color()))
+        self.g_fill.toggled.connect(lambda v: self._set("fill_enabled", v))
+        self.width.valueChanged.connect(lambda v: self._set("width", v))
+        self.dash.currentTextChanged.connect(lambda v: self._set("dash", v))
+        self.opacity.valueChanged.connect(self._opacity_moved)
+        self.a_start.toggled.connect(lambda v: self._set("arrow_start", v))
+        self.a_end.toggled.connect(lambda v: self._set("arrow_end", v))
+        self.a_shape.currentTextChanged.connect(
+            lambda v: self._set("arrow_shape", v))
+        self.font_size.valueChanged.connect(
+            lambda v: self._set("font_size", v))
+
+        canvas.selectionChanged.connect(self.refresh)
+        canvas.toolChanged.connect(self.refresh)
+        self.refresh()
+
+    # -- write --------------------------------------------------------------
+    def _opacity_moved(self, v: int):
+        self.opacity_lbl.setText(f"{v}%")
+        self._set("opacity", v / 100.0)
+
+    def _set(self, field: str, value):
+        """Apply one changed setting to the selection (or, with nothing
+        selected, to the active tool's memory)."""
         if self._loading:
             return
-        self.opacity_lbl.setText(f"{self.opacity.value()}%")
-        style = self._current_style()
-        self.canvas.set_style(style)
-        for it in self.canvas.selected_items():
-            it.set_style(style)
-
-    def load_style(self, style: Style):
-        self._loading = True
-        self.stroke.set_color(style.stroke)
-        self.fill.set_color(style.fill)
-        self.fill_on.setChecked(style.fill_enabled)
-        self.width.setValue(style.width)
-        self.dash.setCurrentText(style.dash)
-        self.opacity.setValue(int(style.opacity * 100))
-        self.opacity_lbl.setText(f"{self.opacity.value()}%")
-        self.a_start.setChecked(style.arrow_start)
-        self.a_end.setChecked(style.arrow_end)
-        self.a_shape.setCurrentText(style.arrow_shape)
-        self.font_size.setValue(style.font_size)
-        self.text_color.set_color(style.text_color)
-        self._loading = False
-
-    def sync_from_selection(self):
         sel = self.canvas.selected_items()
         if sel:
-            self.load_style(sel[0].get_style())
+            for it in sel:
+                st = it.get_style()
+                setattr(st, field, value)
+                it.set_style(st)
+            for key in {it.kind for it in sel}:
+                setattr(self.canvas.style_for(key), field,
+                        QColor(value) if isinstance(value, QColor) else value)
+        elif self.canvas.tool in self.canvas.tool_styles:
+            setattr(self.canvas.style_for(self.canvas.tool), field, value)
+
+    # -- read -----------------------------------------------------------------
+    def refresh(self):
+        sel = self.canvas.selected_items()
+        if sel:
+            contexts = {it.kind for it in sel}
+            key = next(iter(contexts))
+            title = (TITLES.get(key, key.title()) if len(sel) == 1
+                     else f"{len(sel)} items")
+            groups = set().union(*(GROUPS.get(c, ()) for c in contexts))
+            self._show(title, groups, sel[0].get_style())
+        elif self.canvas.tool in GROUPS:
+            tool = self.canvas.tool
+            self._show(TITLES[tool], set(GROUPS[tool]),
+                       self.canvas.style_for(tool))
+        else:
+            self._show(None, set(), None)
+
+    def _show(self, title: str | None, groups: set, style: Style | None):
+        self.hint.setVisible(title is None)
+        self.header.setVisible(title is not None)
+        self.header.setText(title or "")
+        for name, box in self._groups.items():
+            box.setVisible(name in groups)
+        self.g_opacity.setVisible(title is not None)
+        if style is not None:
+            self._load(style)
+
+    def _load(self, style: Style):
+        self._loading = True
+        try:
+            self.stroke.set_color(style.stroke)
+            self.width.setValue(style.width)
+            self.dash.setCurrentText(style.dash)
+            self.g_fill.setChecked(style.fill_enabled)
+            self.fill.set_color(style.fill)
+            self.a_start.setChecked(style.arrow_start)
+            self.a_end.setChecked(style.arrow_end)
+            self.a_shape.setCurrentText(style.arrow_shape)
+            self.font_size.setValue(style.font_size)
+            self.text_color.set_color(style.text_color)
+            self.opacity.setValue(round(style.opacity * 100))
+            self.opacity_lbl.setText(f"{self.opacity.value()}%")
+        finally:
+            self._loading = False

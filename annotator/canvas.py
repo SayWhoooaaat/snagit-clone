@@ -234,6 +234,7 @@ class Canvas(QGraphicsView):
     selectionChanged = Signal()
     imageImported = Signal(QImage)  # emitted when a raster image enters the scene
     toolReset = Signal()            # emitted after a creation tool places one item
+    toolChanged = Signal(str)       # the active tool id changed
     zoomChanged = Signal(float)     # current zoom factor (1.0 == 100%)
 
     MIN_ZOOM = 0.05
@@ -257,7 +258,16 @@ class Canvas(QGraphicsView):
         self.setAcceptDrops(True)
         # No view background brush: that lets the scene's drawBackground paint
         # the dark surround *and* the white document page.
-        self.style = Style()
+        #
+        # One remembered style per drawing tool (plus "image" for pasted
+        # pictures), so settings can never leak between tools: arrowheads
+        # stay off rectangles, and the Line and Arrow presets stay
+        # independent even though both create the same item kind.
+        self.tool_styles = {
+            RECT: Style(), ELLIPSE: Style(),
+            LINE: Style(), ARROW: Style(arrow_end=True),
+            TEXT: Style(), CALLOUT: Style(), "image": Style(),
+        }
         self.tool = SELECT
         self._new_item = None
         self._start = QPointF()
@@ -273,13 +283,20 @@ class Canvas(QGraphicsView):
     def set_tool(self, tool: str):
         self.tool = tool
         self._grip_hover = None  # re-evaluate the cursor on the next move
+        if tool != SELECT:
+            # arming a drawing tool means "I'm about to draw", so drop the
+            # selection — the style panel then shows that tool's settings
+            self.scene_.clearSelection()
         self.setDragMode(QGraphicsView.RubberBandDrag if tool == SELECT
                          else QGraphicsView.NoDrag)
         self.viewport().setCursor(Qt.ArrowCursor if tool == SELECT
                                   else Qt.CrossCursor)
+        self.toolChanged.emit(tool)
 
-    def set_style(self, style: Style):
-        self.style = style.clone()
+    def style_for(self, key: str) -> Style:
+        """The remembered style for a tool id or item kind. Callers may
+        mutate the returned object to update the memory."""
+        return self.tool_styles.setdefault(key, Style())
 
     def selected_items(self):
         return [it for it in self.scene_.selectedItems()
@@ -289,7 +306,7 @@ class Canvas(QGraphicsView):
     def add_pixmap(self, pixmap: QPixmap, center_on: QPointF | None = None):
         if pixmap.isNull():
             return None
-        item = I.ImageItem(pixmap, self.style)
+        item = I.ImageItem(pixmap, self.style_for("image"))
         item.setZValue(self.scene_.next_z())
         if center_on is None:
             center_on = self.mapToScene(self.viewport().rect().center())
@@ -541,20 +558,22 @@ class Canvas(QGraphicsView):
         event.accept()
 
     def _make_item(self):
+        st = self.style_for(self.tool)
         if self.tool in _RECTY:
-            it = _RECTY[self.tool](self.style)
+            it = _RECTY[self.tool](st)
             it._rect = QRectF(0, 0, 1, 1)
             return it
         if self.tool in (LINE, ARROW):
-            st = self.style.clone()
-            if self.tool == ARROW and not (st.arrow_start or st.arrow_end):
-                st.arrow_end = True
-            cls = I.ArrowItem if self.tool == ARROW else I.LineItem
-            return cls(st, QPointF(0, 0), QPointF(1, 0))
+            # Line and Arrow are two presets over the same item. The kind tag
+            # permanently records which preset made it, so later edits to the
+            # item feed back into the right tool's remembered style.
+            it = I.LineItem(st, QPointF(0, 0), QPointF(1, 0))
+            it.kind = self.tool
+            return it
         if self.tool == TEXT:
-            return I.TextItem(self.style, "")
+            return I.TextItem(st, "")
         if self.tool == CALLOUT:
-            return I.CalloutItem(self.style, "")
+            return I.CalloutItem(st, "")
         return None
 
     def mouseMoveEvent(self, event):

@@ -393,9 +393,22 @@ class EllipseItem(BaseItem):
 #  Line / Arrow
 # --------------------------------------------------------------------------- #
 def _draw_head(painter, tip: QPointF, tail: QPointF, shape: str, size: float,
-               color: QColor):
-    """Draw an arrowhead at ``tip`` pointing away from ``tail``."""
+               width: float, color: QColor):
+    """Draw an endpoint decoration at ``tip`` pointing away from ``tail``."""
     ang = math.atan2(tip.y() - tail.y(), tip.x() - tail.x())
+    if shape == "line":
+        # A crossbar perpendicular to the line, exactly as wide as the
+        # stroke and 3x as long, so it scales with the line's thickness.
+        if width <= 0:
+            return
+        pen = QPen(color, width)
+        pen.setCapStyle(Qt.FlatCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        perp = QPointF(-math.sin(ang), math.cos(ang))
+        half = width * 1.5
+        painter.drawLine(tip + perp * half, tip - perp * half)
+        return
     painter.setBrush(QBrush(color))
     pen = QPen(color)
     pen.setWidthF(1.0)
@@ -403,15 +416,10 @@ def _draw_head(painter, tip: QPointF, tail: QPointF, shape: str, size: float,
     if shape == "circle":
         painter.drawEllipse(tip, size * 0.5, size * 0.5)
         return
-    spread = math.radians(26)
+    spread = math.radians(26)  # triangle
     p1 = tip - QPointF(math.cos(ang - spread) * size, math.sin(ang - spread) * size)
     p2 = tip - QPointF(math.cos(ang + spread) * size, math.sin(ang + spread) * size)
-    if shape == "line":
-        painter.setBrush(Qt.NoBrush)
-        painter.drawLine(tip, p1)
-        painter.drawLine(tip, p2)
-    else:  # triangle
-        painter.drawPolygon(QPolygonF([tip, p1, p2]))
+    painter.drawPolygon(QPolygonF([tip, p1, p2]))
 
 
 def _snap_angle(anchor: QPointF, point: QPointF, step: float = 15.0) -> QPointF:
@@ -426,6 +434,10 @@ def _snap_angle(anchor: QPointF, point: QPointF, step: float = 15.0) -> QPointF:
 
 
 class LineItem(BaseItem):
+    # "line" or "arrow", set per instance at creation. Both are the same item
+    # with the same abilities (a line can carry heads too); the tag only
+    # records which tool preset made it, deciding the item's title in the
+    # style panel and which remembered style its edits feed back into.
     kind = "line"
 
     def __init__(self, style: Style, p1: QPointF | None = None,
@@ -541,9 +553,11 @@ class LineItem(BaseItem):
         size = self._head_size()
         color = QColor(self._style.stroke)
         if self._style.arrow_end:
-            _draw_head(painter, self._p2, self._p1, self._style.arrow_shape, size, color)
+            _draw_head(painter, self._p2, self._p1, self._style.arrow_shape,
+                       size, self._style.width, color)
         if self._style.arrow_start:
-            _draw_head(painter, self._p1, self._p2, self._style.arrow_shape, size, color)
+            _draw_head(painter, self._p1, self._p2, self._style.arrow_shape,
+                       size, self._style.width, color)
 
     def shape(self):
         path = QPainterPath()
@@ -556,10 +570,6 @@ class LineItem(BaseItem):
     def _extra_dict(self) -> dict:
         return {"p1": [self._p1.x(), self._p1.y()],
                 "p2": [self._p2.x(), self._p2.y()]}
-
-
-class ArrowItem(LineItem):
-    kind = "arrow"
 
 
 # --------------------------------------------------------------------------- #
@@ -795,8 +805,8 @@ def item_from_dict(d: dict) -> BaseItem:
         it = ImageItem(pixmap_from_b64(d["image"]), style)
         it._b64 = d["image"]  # keep the exact source bytes; skip a re-encode
     elif kind in ("line", "arrow"):
-        cls = ArrowItem if kind == "arrow" else LineItem
-        it = cls(style, QPointF(*d["p1"]), QPointF(*d["p2"]))
+        it = LineItem(style, QPointF(*d["p1"]), QPointF(*d["p2"]))
+        it.kind = kind  # preserve the preset tag (see LineItem)
     elif kind == "ellipse":
         it = EllipseItem(style)
     elif kind == "text":

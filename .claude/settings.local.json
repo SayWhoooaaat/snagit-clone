@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(chmod +x run.sh)",
-      "Bash(.venv/bin/python /tmp/claude-1000/-home-ef-coding-projects-snagit-clone/c97e8c9e-868e-4ad6-8eea-2f7754fd69cb/scratchpad/smoke.py)"
+      "Bash(.venv/bin/python /tmp/claude-1000/-home-ef-coding-projects-snagit-clone/c97e8c9e-868e-4ad6-8eea-2f7754fd69cb/scratchpad/smoke.py)",
+      "Bash(.venv/bin/python /tmp/claude-1000/-home-ef-coding-projects-snagit-clone/a7117cba-434f-44d7-b1f4-e159a116c81a/scratchpad/smoke_panel.py)",
+      "Bash(.venv/bin/python /tmp/claude-1000/-home-ef-coding-projects-snagit-clone/a7117cba-434f-44d7-b1f4-e159a116c81a/scratchpad/smoke_undo.py)"
     ]
   }
 }

@@ -169,7 +169,6 @@ class MainWindow(QMainWindow):
         self.canvas.setFocus()
 
     def _wire(self):
-        self.canvas.selectionChanged.connect(self.props.sync_from_selection)
         self.canvas.toolReset.connect(
             lambda: self._tool_actions[C.SELECT].setChecked(True))
         self.canvas.scene_.changed.connect(self._schedule_autosave)
@@ -287,7 +286,7 @@ class MainWindow(QMainWindow):
         self.history.reset()
         self.doc_path = path
         self.canvas.fit_to_page()
-        self.props.sync_from_selection()
+        self.props.refresh()
         self.statusBar().showMessage(f"Opened {os.path.basename(path)}", 3000)
 
     def save_to_library(self):

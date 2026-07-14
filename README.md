@@ -65,12 +65,25 @@ thumbnail to reopen that document fully editable.
   (type a number and press Enter), and `+`. Also `Ctrl+0` (Fit),
   `Ctrl+=` / `Ctrl+-` (in/out), and `Ctrl`+mouse-wheel.
 
-**Annotation tools** (all with configurable stroke/fill colour, width, opacity
-and solid/dash/dot line styles)
-- **Text** and **Callout** bubbles with a draggable pointer/tail (double-click to
-  edit text inline).
-- **Rectangle**, **Ellipse**, **Line**, and **Arrow** with arrowheads on start,
-  end, or both, and a selectable head shape (triangle / line / circle).
+**Annotation tools**
+- **Rectangle** and **Ellipse** (stroke + optional fill), **Line** and
+  **Arrow** (endpoints on start, end or both; triangle / line (a
+  perpendicular crossbar) / circle shapes, all scaling with the stroke
+  width), **Text**, and **Callout** bubbles with a draggable pointer/tail
+  (double-click to edit text inline).
+- Line and Arrow create the same object with identical options — give a line
+  arrowheads and it is effectively an arrow — but each item permanently
+  remembers which of the two tools made it.
+- The **Style panel** (right dock) is contextual: it shows only the settings
+  that apply to the active tool or the current selection (fill for shapes,
+  endpoints for lines/arrows, font for text, opacity for everything, images
+  included). Every tool remembers its own style, and editing a selected item
+  updates only its own tool's memory, so the next item you draw looks like
+  the one you just tweaked and the presets never contaminate each other —
+  give a line circle endpoints and every new line keeps them, while arrows
+  stay exactly as you left them.
+- **Undo / redo** for every document edit — drawing, moving, resizing,
+  styling, deleting, page resizes (`Ctrl+Z`, `Ctrl+Shift+Z` / `Ctrl+Y`).
 
 **Library / recents**
 - A horizontal **filmstrip** of recent *documents* along the bottom.
@@ -95,6 +108,7 @@ and solid/dash/dot line styles)
 | Text | `T` | Open | `Ctrl+O` |
 | Callout | `C` | Library | `Ctrl+G` |
 | Export | `Ctrl+E` | Save to Library | `Ctrl+S` |
+| Undo | `Ctrl+Z` | Redo | `Ctrl+Shift+Z` / `Ctrl+Y` |
 
 ## Layout
 
@@ -104,7 +118,8 @@ annotator/
   handles.py     resize / rotate / tail handle items
   items.py       image + annotation graphics objects (one transform model)
   canvas.py      QGraphicsView/Scene: import, auto-expand, tools, z-order, export
-  properties.py  style dock (colour / opacity / width / dash / arrows / text)
+  properties.py  contextual style panel (one remembered style per tool)
+  history.py     snapshot-based undo/redo over the document serialization
   library.py     on-disk storage, filmstrip, gallery
   mainwindow.py  toolbars, actions, wiring
   __main__.py    entry point (python -m annotator)
