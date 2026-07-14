@@ -84,6 +84,12 @@ thumbnail to reopen that document fully editable.
   the one you just tweaked and the presets never contaminate each other —
   give a line circle endpoints and every new line keeps them, while arrows
   stay exactly as you left them.
+- Tools **stay armed** after you draw, so ten arrows in a row need one click
+  on the Arrow button; the item you just drew stays selected for quick
+  tweaking. Switch back with `V` or the cursor button.
+- **Copy & paste items** (`Ctrl+C` / `Ctrl+V`): duplicates land with a small
+  offset, and the clipboard survives switching documents — copy something,
+  open another document from the library, paste it there (images included).
 - **Undo / redo** for every document edit — drawing, moving, resizing,
   styling, deleting, page resizes (`Ctrl+Z`, `Ctrl+Shift+Z` / `Ctrl+Y`).
 
@@ -94,8 +100,8 @@ thumbnail to reopen that document fully editable.
 
 **Output**
 - **Export…** the flattened page to PNG (`Ctrl+E`), **Save to Library**
-  (`Ctrl+S`, forces an immediate document save), or **Copy** the flattened page
-  to the clipboard (`Ctrl+Shift+C`).
+  (`Ctrl+S`, forces an immediate document save), or **Copy Image** — the
+  flattened page — to the clipboard (`Ctrl+Shift+C`).
 
 ## Keyboard shortcuts
 
@@ -111,6 +117,7 @@ thumbnail to reopen that document fully editable.
 | Callout | `C` | Library | `Ctrl+G` |
 | Export | `Ctrl+E` | Save to Library | `Ctrl+S` |
 | Undo | `Ctrl+Z` | Redo | `Ctrl+Shift+Z` / `Ctrl+Y` |
+| Copy items | `Ctrl+C` | Copy flattened image | `Ctrl+Shift+C` |
 
 ## Layout
 

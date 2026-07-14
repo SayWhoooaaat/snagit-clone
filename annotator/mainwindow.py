@@ -75,11 +75,13 @@ class MainWindow(QMainWindow):
         self.addToolBar(file_tb)
         file_tb.addAction(self._act("New", self.new_document, "Ctrl+N"))
         file_tb.addAction(self._act("Open", self.open_files, "Ctrl+O"))
+        file_tb.addAction(self._act("Copy", self.copy_selection, "Ctrl+C"))
         file_tb.addAction(self._act("Paste", self.paste, "Ctrl+V"))
         file_tb.addAction(self._act("Export…", self.export_png, "Ctrl+E"))
         file_tb.addAction(self._act("Save to Library", self.save_to_library,
                                     "Ctrl+S"))
-        file_tb.addAction(self._act("Copy", self.copy_result, "Ctrl+Shift+C"))
+        file_tb.addAction(self._act("Copy Image", self.copy_result,
+                                    "Ctrl+Shift+C"))
         file_tb.addSeparator()
         self.undo_action = self._act("Undo", self.undo, "Ctrl+Z")
         self.redo_action = self._act("Redo", self.redo)
@@ -176,8 +178,6 @@ class MainWindow(QMainWindow):
         self.canvas.setFocus()
 
     def _wire(self):
-        self.canvas.toolReset.connect(
-            lambda: self._tool_actions[C.SELECT].setChecked(True))
         self.canvas.scene_.changed.connect(self._schedule_autosave)
         self.filmstrip.docActivated.connect(self.open_document)
         self.filmstrip.docDeleted.connect(self._on_doc_deleted)
@@ -221,7 +221,16 @@ class MainWindow(QMainWindow):
 
     def paste(self):
         if not self.canvas.paste_clipboard():
-            self.statusBar().showMessage("Clipboard has no image.", 3000)
+            self.statusBar().showMessage("Clipboard has no image or items.", 3000)
+
+    def copy_selection(self):
+        sel = self.canvas.selected_items()
+        if not sel:
+            self.statusBar().showMessage("Nothing selected to copy.", 3000)
+            return
+        self.canvas.copy_selection()
+        self.statusBar().showMessage(
+            f"Copied {len(sel)} item{'s' if len(sel) > 1 else ''}.", 3000)
 
     def export_png(self):
         img = self.canvas.scene_.render_document()

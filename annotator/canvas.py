@@ -1,11 +1,13 @@
 """The editing surface: an auto-expanding QGraphicsScene + QGraphicsView."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QEvent, QRectF, QPointF, Signal
+import json
+
+from PySide6.QtCore import Qt, QEvent, QRectF, QPointF, QByteArray, QMimeData, Signal
 from PySide6.QtGui import (
     QImage, QPainter, QPixmap, QColor, QGuiApplication, QPen, QBrush,
 )
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QGraphicsProxyWidget
 
 from .model import Style
 from . import items as I
@@ -21,6 +23,9 @@ TEXT = "text"
 CALLOUT = "callout"
 
 _RECTY = {RECT: I.RectItem, ELLIPSE: I.EllipseItem}
+
+# clipboard format for copying items within / between documents
+ITEMS_MIME = "application/x-annotator-items+json"
 
 
 DEFAULT_PAGE = QRectF(0, 0, 200, 200)
@@ -233,7 +238,6 @@ class Scene(QGraphicsScene):
 class Canvas(QGraphicsView):
     selectionChanged = Signal()
     imageImported = Signal(QImage)  # emitted when a raster image enters the scene
-    toolReset = Signal()            # emitted after a creation tool places one item
     toolChanged = Signal(str)       # the active tool id changed
     zoomChanged = Signal(float)     # current zoom factor (1.0 == 100%)
 
@@ -320,9 +324,51 @@ class Canvas(QGraphicsView):
         self.imageImported.emit(pixmap.toImage())
         return item
 
+    # -- copy / paste of items ---------------------------------------------
+    def copy_selection(self) -> bool:
+        """Put the selected items on the clipboard (as the same JSON the
+        documents use, so images travel along and pastes work across
+        documents)."""
+        sel = sorted(self.selected_items(), key=lambda it: it.zValue())
+        if not sel:
+            return False
+        data = json.dumps([it.to_dict() for it in sel]).encode()
+        md = QMimeData()
+        md.setData(ITEMS_MIME, QByteArray(data))
+        QGuiApplication.clipboard().setMimeData(md)
+        return True
+
+    def _paste_items(self, dicts: list) -> bool:
+        try:
+            items = [I.item_from_dict(d) for d in dicts]
+        except (KeyError, TypeError, ValueError):
+            return False  # malformed clipboard payload; treat as no paste
+        self.scene_.clearSelection()
+        z = self.scene_.next_z()
+        rect = None
+        for it in items:
+            it.setZValue(z)
+            z += 1
+            # slight offset so an in-place duplicate is visibly a copy
+            it.setPos(it.pos() + QPointF(12, 12))
+            self.scene_.addItem(it)
+            it.setSelected(True)
+            r = it.sceneBoundingRect()
+            rect = r if rect is None else rect.united(r)
+        if rect is not None:
+            self.scene_.grow_to_include(rect)
+        return True
+
     def paste_clipboard(self):
         cb = QGuiApplication.clipboard()
         md = cb.mimeData()
+        if md.hasFormat(ITEMS_MIME):
+            try:
+                dicts = json.loads(bytes(md.data(ITEMS_MIME)).decode())
+            except ValueError:
+                dicts = None
+            if dicts and self._paste_items(dicts):
+                return True
         if md.hasImage():
             img = cb.image()
             if not img.isNull():
@@ -541,6 +587,12 @@ class Canvas(QGraphicsView):
                     return
         if self.tool == SELECT or event.button() != Qt.LeftButton:
             return super().mousePressEvent(event)
+        if isinstance(self.itemAt(event.position().toPoint()),
+                      QGraphicsProxyWidget):
+            # tools stay armed after placing an item, so a click inside an
+            # open inline text editor must reach the editor, not spawn
+            # another item underneath it
+            return super().mousePressEvent(event)
         self._start = self.mapToScene(event.position().toPoint())
         item = self._make_item()
         if item is None:
@@ -554,7 +606,6 @@ class Canvas(QGraphicsView):
             item.setSelected(True)
             item.start_editing()
             self._new_item = None
-            self._finish_tool()
         event.accept()
 
     def _make_item(self):
@@ -623,7 +674,9 @@ class Canvas(QGraphicsView):
             self.scene_.clearSelection()
             item.setSelected(True)
             item.grow_scene()
-        self._finish_tool()
+        # the tool deliberately stays armed, so several items of the same
+        # kind can be drawn in a row; switch back to Select via V or the
+        # cursor button
         event.accept()
 
     def keyPressEvent(self, event):
@@ -633,8 +686,3 @@ class Canvas(QGraphicsView):
             event.accept()
             return
         super().keyPressEvent(event)
-
-    def _finish_tool(self):
-        # revert to the select tool after placing one annotation
-        self.set_tool(SELECT)
-        self.toolReset.emit()
