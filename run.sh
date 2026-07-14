@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the annotator using the project virtualenv.
+# Launch PasteUp using the project virtualenv.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -9,4 +9,4 @@ if [ ! -d .venv ]; then
     ./.venv/bin/python -m pip install PySide6-Essentials
 fi
 
-exec ./.venv/bin/python -m annotator "$@"
+exec ./.venv/bin/python -m pasteup "$@"

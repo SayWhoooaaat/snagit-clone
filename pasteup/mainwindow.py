@@ -20,7 +20,7 @@ from .properties import PropertiesPanel
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Annotator")
+        self.setWindowTitle("PasteUp")
         self.resize(1180, 820)
 
         self.canvas = C.Canvas()

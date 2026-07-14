@@ -25,7 +25,7 @@ CALLOUT = "callout"
 _RECTY = {RECT: I.RectItem, ELLIPSE: I.EllipseItem}
 
 # clipboard format for copying items within / between documents
-ITEMS_MIME = "application/x-annotator-items+json"
+ITEMS_MIME = "application/x-pasteup-items+json"
 
 
 DEFAULT_PAGE = QRectF(0, 0, 200, 200)

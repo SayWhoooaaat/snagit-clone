@@ -1,8 +1,8 @@
-# Annotator
+# PasteUp
 
-A lightweight, Snagit-style **image annotation editor** for Linux. It does not
-capture the screen — it edits images you bring in via **clipboard, file open, or
-drag-and-drop**.
+A lightweight, Snagit-style **image annotation editor** for Linux: paste in a
+screenshot, mark it up. It does not capture the screen — it edits images you
+bring in via **clipboard, file open, or drag-and-drop**.
 
 ## Why this stack
 
@@ -17,7 +17,7 @@ handful of small modules with no build step and no dependency treadmill.
 ```bash
 ./run.sh                # creates .venv on first run, then launches
 # or, once the venv exists:
-.venv/bin/python -m annotator
+.venv/bin/python -m pasteup
 ```
 
 Install as a command instead:
@@ -25,7 +25,14 @@ Install as a command instead:
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e .
-annotator
+pasteup
+```
+
+**Install into your launcher** (app grid / search, with icon):
+
+```bash
+./install-desktop.sh              # writes ~/.local/share/applications/pasteup.desktop
+./install-desktop.sh --uninstall  # removes it again
 ```
 
 ## Documents
@@ -34,7 +41,7 @@ You edit a **document** — a white page (default **200×200**) holding any numb
 of images and annotations with their z-order and transforms. **New** (`Ctrl+N`)
 starts a fresh page; the page auto-grows to fit whatever you add.
 
-Documents are saved in `~/.local/share/Annotator/library/` as `.snagdoc` files
+Documents are saved in `~/.local/share/PasteUp/library/` as `.snagdoc` files
 (JSON: page size + every item, with images embedded as base64 PNG) plus a `.png`
 thumbnail. The current document **auto-saves** as you work, so the filmstrip and
 Library always show your recent *documents*, not raw clipboard frames. Click any
@@ -122,7 +129,7 @@ thumbnail to reopen that document fully editable.
 ## Layout
 
 ```
-annotator/
+pasteup/
   model.py       Style dataclass + pen/brush helpers
   handles.py     resize / rotate / tail handle items
   items.py       image + annotation graphics objects (one transform model)
@@ -132,5 +139,7 @@ annotator/
   history.py     snapshot-based undo/redo over the document serialization
   library.py     on-disk storage, filmstrip, gallery
   mainwindow.py  toolbars, actions, wiring
-  __main__.py    entry point (python -m annotator)
+  appicon.svg    the app icon (hand-written SVG, installed to hicolor)
+  __main__.py    entry point (python -m pasteup)
+install-desktop.sh   user-level launcher entry + icon install/uninstall
 ```

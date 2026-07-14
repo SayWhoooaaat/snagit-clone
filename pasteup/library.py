@@ -15,6 +15,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import time
 
 from PySide6.QtCore import Qt, QSize, Signal, QStandardPaths, QTimer
@@ -34,7 +35,15 @@ _NAME_RE = re.compile(r"^doc-(\d{8})-(\d{6})")
 
 def library_dir() -> str:
     base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-    path = os.path.join(base or os.path.expanduser("~/.snagit-clone"), "library")
+    path = os.path.join(base or os.path.expanduser("~/.pasteup"), "library")
+    # One-time migration: the app used to be called "Annotator" (with an
+    # organizationName, hence the doubled directory). Only runs for the real
+    # app identity, so test runs with other app names can't touch it.
+    legacy = os.path.expanduser("~/.local/share/Annotator/Annotator/library")
+    if (os.path.basename(base or "") == "PasteUp"
+            and not os.path.isdir(path) and os.path.isdir(legacy)):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        shutil.move(legacy, path)
     os.makedirs(path, exist_ok=True)
     return path
 
