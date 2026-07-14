@@ -74,10 +74,12 @@ thumbnail to reopen that document fully editable.
 - Line and Arrow create the same object with identical options — give a line
   arrowheads and it is effectively an arrow — but each item permanently
   remembers which of the two tools made it.
-- The **Style panel** (right dock) is contextual: it shows only the settings
-  that apply to the active tool or the current selection (fill for shapes,
-  endpoints for lines/arrows, font for text, opacity for everything, images
-  included). Every tool remembers its own style, and editing a selected item
+- The right-hand **Tools panel** puts the tools in a row of icon buttons up
+  top (icons are drawn in code — no image assets — and follow the system
+  theme). Beneath them it shows only the settings that apply to the active
+  tool or the current selection (fill for shapes, endpoints for lines/arrows,
+  font for text, opacity for everything, images included). Every tool
+  remembers its own style, and editing a selected item
   updates only its own tool's memory, so the next item you draw looks like
   the one you just tweaked and the presets never contaminate each other —
   give a line circle endpoints and every new line keeps them, while arrows
@@ -118,7 +120,8 @@ annotator/
   handles.py     resize / rotate / tail handle items
   items.py       image + annotation graphics objects (one transform model)
   canvas.py      QGraphicsView/Scene: import, auto-expand, tools, z-order, export
-  properties.py  contextual style panel (one remembered style per tool)
+  properties.py  tool buttons + contextual style panel (one style per tool)
+  icons.py       tool icons drawn with QPainter (no image assets)
   history.py     snapshot-based undo/redo over the document serialization
   library.py     on-disk storage, filmstrip, gallery
   mainwindow.py  toolbars, actions, wiring

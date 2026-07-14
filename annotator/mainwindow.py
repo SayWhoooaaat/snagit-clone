@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import canvas as C
+from . import icons
 from . import library as L
 from .history import History
 from .properties import PropertiesPanel
@@ -35,9 +36,13 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.props = PropertiesPanel(self.canvas)
-        dock = QDockWidget("Style", self)
+        dock = QDockWidget("Tools", self)
         dock.setWidget(self.props)
         dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        # no close button: the dock holds the drawing tools, hiding it
+        # would leave the app without them
+        dock.setFeatures(QDockWidget.DockWidgetMovable
+                         | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
         # current document identity + debounced auto-save
@@ -85,16 +90,15 @@ class MainWindow(QMainWindow):
         file_tb.addSeparator()
         file_tb.addAction(self._act("Library", self.open_gallery, "Ctrl+G"))
 
-        # tools ------------------------------------------------------------
-        tool_tb = QToolBar("Tools")
-        tool_tb.setMovable(False)
-        self.addToolBar(Qt.LeftToolBarArea, tool_tb)
+        # tools — icon buttons at the top of the right-hand panel. The
+        # QActions are still added to the window so the shortcuts work.
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
         self._tool_actions = {}
+        icon_color = self.palette().windowText().color()
         tools = [
             ("Select", C.SELECT, "V"),
-            ("Rect", C.RECT, "R"),
+            ("Rectangle", C.RECT, "R"),
             ("Ellipse", C.ELLIPSE, "O"),
             ("Line", C.LINE, "L"),
             ("Arrow", C.ARROW, "A"),
@@ -104,10 +108,13 @@ class MainWindow(QMainWindow):
         for label, tool, sc in tools:
             a = self._act(label, lambda checked=False, t=tool: self.set_tool(t),
                           sc, checkable=True)
+            a.setIcon(icons.tool_icon(tool, icon_color))
+            a.setToolTip(f"{label} ({sc})")
+            self.addAction(a)
             self.tool_group.addAction(a)
-            tool_tb.addAction(a)
             self._tool_actions[tool] = a
         self._tool_actions[C.SELECT].setChecked(True)
+        self.props.set_tool_actions(list(self._tool_actions.values()))
 
         # arrange / transform / edit --------------------------------------
         edit_tb = QToolBar("Arrange")

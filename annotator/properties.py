@@ -16,11 +16,12 @@ versa.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QFormLayout, QVBoxLayout, QHBoxLayout, QPushButton, QSlider,
     QSpinBox, QComboBox, QCheckBox, QColorDialog, QLabel, QGroupBox,
+    QToolButton, QFrame,
 )
 
 from .model import Style, ARROW_SHAPES
@@ -84,13 +85,25 @@ class PropertiesPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignTop)
 
+        # tool buttons live here, installed by the main window via
+        # set_tool_actions() — the actions own the shortcuts and the
+        # exclusive checked state, the buttons only mirror them
+        self._tools_row = QHBoxLayout()
+        self._tools_row.setSpacing(2)
+        outer.addLayout(self._tools_row)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        outer.addWidget(sep)
+
         self.header = QLabel()
         f = self.header.font()
         f.setBold(True)
         self.header.setFont(f)
         outer.addWidget(self.header)
 
-        self.hint = QLabel("Pick a tool, or select an item, to edit its style.")
+        self.hint = QLabel(
+            "Pick a tool above, or select an item, to edit its style.")
         self.hint.setWordWrap(True)
         outer.addWidget(self.hint)
 
@@ -171,6 +184,17 @@ class PropertiesPanel(QWidget):
         canvas.selectionChanged.connect(self.refresh)
         canvas.toolChanged.connect(self.refresh)
         self.refresh()
+
+    def set_tool_actions(self, actions):
+        """Install the tool QActions as a row of icon buttons at the top."""
+        for a in actions:
+            b = QToolButton()
+            b.setDefaultAction(a)
+            b.setAutoRaise(True)
+            b.setIconSize(QSize(20, 20))
+            b.setFixedSize(30, 30)
+            self._tools_row.addWidget(b)
+        self._tools_row.addStretch(1)
 
     # -- write --------------------------------------------------------------
     def _opacity_moved(self, v: int):
